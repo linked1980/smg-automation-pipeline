@@ -42,19 +42,21 @@ app.get('/test', (req, res) => {
         .status { padding: 10px; margin: 10px 0; border-radius: 3px; }
         .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
     </style>
 </head>
 <body>
     <h1>🚀 SMG Pipeline Tester</h1>
     <div class="status success">✅ Module 1 working! Test the other modules below:</div>
+    <div class="status warning">📝 Updated with real store numbers from your database!</div>
     
     <div class="module">
         <h3>📊 Module 2: Transform CSV Data</h3>
-        <p>Test CSV transformation logic:</p>
+        <p>Test CSV transformation logic (using real store numbers):</p>
         <label>CSV Data:</label>
         <textarea id="csvData">store,question_1,question_2
-123,4.5,3.8
-124,4.2,4.1</textarea>
+1738,4.5,3.8
+1805,4.2,4.1</textarea>
         <br><br>
         <label>Date:</label> <input type="date" id="transformDate" value="2025-06-26">
         <br><br>
@@ -67,8 +69,8 @@ app.get('/test', (req, res) => {
         <p>Test end-to-end pipeline (dates → transform → upload):</p>
         <label>CSV Data:</label>
         <textarea id="pipelineCsv">store,question_1
-123,4.5
-124,4.2</textarea>
+1738,4.5
+1805,4.2</textarea>
         <br><br>
         <label>Upload Mode:</label> 
         <select id="uploadMode">
@@ -88,6 +90,7 @@ app.get('/test', (req, res) => {
             <a href="/smg-daily-dates" target="_blank">Module 1: Daily Dates</a> | 
             <a href="/smg-status" target="_blank">Module 5: System Status</a>
         </p>
+        <p><strong>Available Store Numbers:</strong> 1738 (Woodbury), 1805 (West St Paul), 2138 (Eden Prairie), 2302 (Chaska), 2404 (Dinkytown)</p>
     </div>
 
     <script>
@@ -257,6 +260,8 @@ app.post('/smg-transform', async (req, res) => {
       });
     }
     
+    console.log(`🏪 Found ${stores.length} stores in database`);
+    
     // Create store lookup maps
     const storeByNumber = new Map();
     const storeByName = new Map();
@@ -275,17 +280,21 @@ app.post('/smg-transform', async (req, res) => {
         rowData[header.toLowerCase()] = values[index];
       });
       
+      console.log(`🔍 Processing row ${i}:`, rowData);
+      
       // Find store_id - try store number first, then store name
       let storeId = null;
       
       if (rowData.store_number || rowData['store number'] || rowData.store) {
         const storeNum = rowData.store_number || rowData['store number'] || rowData.store;
         storeId = storeByNumber.get(storeNum.toString());
+        console.log(`🔍 Lookup store number ${storeNum} → ${storeId ? 'Found' : 'Not found'}`);
       }
       
       if (!storeId && (rowData.store_name || rowData['store name'])) {
         const storeName = (rowData.store_name || rowData['store name']).toLowerCase();
         storeId = storeByName.get(storeName);
+        console.log(`🔍 Lookup store name ${storeName} → ${storeId ? 'Found' : 'Not found'}`);
       }
       
       if (!storeId) {
@@ -326,6 +335,7 @@ app.post('/smg-transform', async (req, res) => {
             };
             
             transformedData.push(transformedRecord);
+            console.log(`✅ Created record: Store ${storeId}, Question ${questionText}, Score ${transformedRecord.score}`);
           }
         }
       });
@@ -529,24 +539,25 @@ app.post('/smg-upload', async (req, res) => {
 
 // MODULE 4: SMG Pipeline - Complete integration flow
 app.post('/smg-pipeline', async (req, res) => {
+  const pipelineStart = new Date();
+  let pipelineResults = {
+    pipeline_id: `pipeline_${Date.now()}`,
+    status: 'running',
+    started_at: pipelineStart.toISOString(),
+    stages: {
+      date_calculation: { status: 'pending', duration_ms: 0 },
+      transformation: { status: 'pending', duration_ms: 0 },
+      upload: { status: 'pending', duration_ms: 0 }
+    },
+    total_duration_ms: 0,
+    records_processed: 0,
+    errors: []
+  };
+
   try {
     console.log('🚀 Starting SMG complete pipeline execution...');
     
     const { csvData, dates, uploadMode = 'upsert' } = req.body;
-    const pipelineStart = new Date();
-    const pipelineResults = {
-      pipeline_id: `pipeline_${Date.now()}`,
-      status: 'running',
-      started_at: pipelineStart.toISOString(),
-      stages: {
-        date_calculation: { status: 'pending', duration_ms: 0 },
-        transformation: { status: 'pending', duration_ms: 0 },
-        upload: { status: 'pending', duration_ms: 0 }
-      },
-      total_duration_ms: 0,
-      records_processed: 0,
-      errors: []
-    };
     
     // STAGE 1: Date calculation (if dates not provided)
     let processingDates = dates;
@@ -619,6 +630,8 @@ app.post('/smg-pipeline', async (req, res) => {
           throw new Error(`Store lookup failed: ${storeError.message}`);
         }
         
+        console.log(`🏪 Found ${stores.length} stores in database`);
+        
         // Create store lookup maps
         const storeByNumber = new Map();
         const storeByName = new Map();
@@ -649,7 +662,10 @@ app.post('/smg-pipeline', async (req, res) => {
             storeId = storeByName.get(storeName);
           }
           
-          if (!storeId) continue;
+          if (!storeId) {
+            console.warn(`⚠️ Could not find store_id for row ${i} (store: ${rowData.store || rowData.store_number || 'unknown'})`);
+            continue;
+          }
           
           // Transform SMG data to daily_cx_scores format
           Object.keys(rowData).forEach(key => {
@@ -710,73 +726,80 @@ app.post('/smg-pipeline', async (req, res) => {
     
     try {
       if (allTransformedData.length === 0) {
-        throw new Error('No data to upload after transformation');
-      }
-      
-      // Validate data structure
-      const requiredFields = ['store_id', 'date', 'question', 'score'];
-      const validationErrors = [];
-      
-      allTransformedData.forEach((record, index) => {
-        requiredFields.forEach(field => {
-          if (!record[field]) {
-            validationErrors.push(`Record ${index}: Missing required field '${field}'`);
-          }
-        });
-      });
-      
-      if (validationErrors.length > 0) {
-        throw new Error(`Data validation failed: ${validationErrors.join(', ')}`);
-      }
-      
-      // Perform upload based on mode
-      let uploadResult;
-      if (uploadMode === 'upsert') {
-        const { data: upsertData, error: upsertError } = await supabase
-          .from('daily_cx_scores')
-          .upsert(allTransformedData, {
-            onConflict: 'store_id,date,question,score',
-            ignoreDuplicates: false
+        pipelineResults.stages.upload = {
+          status: 'skipped',
+          duration_ms: Date.now() - stage3Start,
+          reason: 'no_data_to_upload',
+          warning: 'No records were transformed - check store numbers in CSV data'
+        };
+        
+        console.log('⚠️ Stage 3 skipped: No data to upload after transformation');
+      } else {
+        // Validate data structure
+        const requiredFields = ['store_id', 'date', 'question', 'score'];
+        const validationErrors = [];
+        
+        allTransformedData.forEach((record, index) => {
+          requiredFields.forEach(field => {
+            if (!record[field]) {
+              validationErrors.push(`Record ${index}: Missing required field '${field}'`);
+            }
           });
+        });
         
-        if (upsertError) throw new Error(`Upsert failed: ${upsertError.message}`);
-        uploadResult = upsertData;
+        if (validationErrors.length > 0) {
+          throw new Error(`Data validation failed: ${validationErrors.join(', ')}`);
+        }
         
-      } else if (uploadMode === 'replace') {
-        const dates = [...new Set(allTransformedData.map(d => d.date))];
-        const storeIds = [...new Set(allTransformedData.map(d => d.store_id))];
+        // Perform upload based on mode
+        let uploadResult;
+        if (uploadMode === 'upsert') {
+          const { data: upsertData, error: upsertError } = await supabase
+            .from('daily_cx_scores')
+            .upsert(allTransformedData, {
+              onConflict: 'store_id,date,question,score',
+              ignoreDuplicates: false
+            });
+          
+          if (upsertError) throw new Error(`Upsert failed: ${upsertError.message}`);
+          uploadResult = upsertData;
+          
+        } else if (uploadMode === 'replace') {
+          const dates = [...new Set(allTransformedData.map(d => d.date))];
+          const storeIds = [...new Set(allTransformedData.map(d => d.store_id))];
+          
+          // Delete existing records
+          const { error: deleteError } = await supabase
+            .from('daily_cx_scores')
+            .delete()
+            .in('date', dates)
+            .in('store_id', storeIds);
+          
+          if (deleteError) throw new Error(`Delete failed: ${deleteError.message}`);
+          
+          // Insert new records
+          const { data: insertData, error: insertError } = await supabase
+            .from('daily_cx_scores')
+            .insert(allTransformedData);
+          
+          if (insertError) throw new Error(`Insert failed: ${insertError.message}`);
+          uploadResult = insertData;
+        }
         
-        // Delete existing records
-        const { error: deleteError } = await supabase
-          .from('daily_cx_scores')
-          .delete()
-          .in('date', dates)
-          .in('store_id', storeIds);
+        const uniqueDates = [...new Set(allTransformedData.map(d => d.date))];
+        const uniqueStores = [...new Set(allTransformedData.map(d => d.store_id))];
         
-        if (deleteError) throw new Error(`Delete failed: ${deleteError.message}`);
+        pipelineResults.stages.upload = {
+          status: 'completed',
+          duration_ms: Date.now() - stage3Start,
+          records_uploaded: allTransformedData.length,
+          upload_mode: uploadMode,
+          dates_affected: uniqueDates.length,
+          stores_affected: uniqueStores.length
+        };
         
-        // Insert new records
-        const { data: insertData, error: insertError } = await supabase
-          .from('daily_cx_scores')
-          .insert(allTransformedData);
-        
-        if (insertError) throw new Error(`Insert failed: ${insertError.message}`);
-        uploadResult = insertData;
+        console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded`);
       }
-      
-      const uniqueDates = [...new Set(allTransformedData.map(d => d.date))];
-      const uniqueStores = [...new Set(allTransformedData.map(d => d.store_id))];
-      
-      pipelineResults.stages.upload = {
-        status: 'completed',
-        duration_ms: Date.now() - stage3Start,
-        records_uploaded: allTransformedData.length,
-        upload_mode: uploadMode,
-        dates_affected: uniqueDates.length,
-        stores_affected: uniqueStores.length
-      };
-      
-      console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded`);
       
     } catch (error) {
       pipelineResults.stages.upload = {
