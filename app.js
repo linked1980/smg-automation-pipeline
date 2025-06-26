@@ -24,6 +24,140 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
+// TEST PAGE ENDPOINT
+app.get('/test', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SMG Pipeline Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f9f9f9; }
+        .module { border: 1px solid #ccc; padding: 20px; margin: 10px 0; background: white; border-radius: 5px; }
+        button { background: #007cba; color: white; padding: 10px 20px; border: none; cursor: pointer; border-radius: 3px; }
+        button:hover { background: #005a87; }
+        .result { background: #f5f5f5; padding: 10px; margin: 10px 0; white-space: pre-wrap; font-family: monospace; border: 1px solid #ddd; max-height: 300px; overflow-y: auto; }
+        textarea { width: 100%; height: 80px; font-family: monospace; }
+        input, select { padding: 5px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 3px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h1>🚀 SMG Pipeline Tester</h1>
+    <div class="status success">✅ Module 1 working! Test the other modules below:</div>
+    
+    <div class="module">
+        <h3>📊 Module 2: Transform CSV Data</h3>
+        <p>Test CSV transformation logic:</p>
+        <label>CSV Data:</label>
+        <textarea id="csvData">store,question_1,question_2
+123,4.5,3.8
+124,4.2,4.1</textarea>
+        <br><br>
+        <label>Date:</label> <input type="date" id="transformDate" value="2025-06-26">
+        <br><br>
+        <button onclick="testTransform()">🔄 Test Transform</button>
+        <div id="transformResult" class="result">Click button to test...</div>
+    </div>
+    
+    <div class="module">
+        <h3>🚀 Module 4: Complete Pipeline</h3>
+        <p>Test end-to-end pipeline (dates → transform → upload):</p>
+        <label>CSV Data:</label>
+        <textarea id="pipelineCsv">store,question_1
+123,4.5
+124,4.2</textarea>
+        <br><br>
+        <label>Upload Mode:</label> 
+        <select id="uploadMode">
+            <option value="upsert">Upsert (recommended)</option>
+            <option value="insert">Insert</option>
+            <option value="replace">Replace</option>
+        </select>
+        <br><br>
+        <button onclick="testPipeline()">🚀 Test Full Pipeline</button>
+        <div id="pipelineResult" class="result">Click button to test...</div>
+    </div>
+
+    <div class="module">
+        <h3>📋 Quick Links</h3>
+        <p>
+            <a href="/" target="_blank">Health Check</a> | 
+            <a href="/smg-daily-dates" target="_blank">Module 1: Daily Dates</a> | 
+            <a href="/smg-status" target="_blank">Module 5: System Status</a>
+        </p>
+    </div>
+
+    <script>
+        const baseUrl = window.location.origin;
+        
+        async function testTransform() {
+            const csvData = document.getElementById('csvData').value;
+            const date = document.getElementById('transformDate').value;
+            const resultDiv = document.getElementById('transformResult');
+            
+            resultDiv.textContent = '🔄 Testing transform...';
+            resultDiv.className = 'result';
+            
+            try {
+                const response = await fetch(baseUrl + '/smg-transform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ csvData, date })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.textContent = '✅ Transform Success:\\n\\n' + JSON.stringify(result, null, 2);
+                    resultDiv.style.background = '#d4edda';
+                } else {
+                    resultDiv.textContent = '❌ Transform Error:\\n\\n' + JSON.stringify(result, null, 2);
+                    resultDiv.style.background = '#f8d7da';
+                }
+            } catch (error) {
+                resultDiv.textContent = '❌ Network Error: ' + error.message;
+                resultDiv.style.background = '#f8d7da';
+            }
+        }
+        
+        async function testPipeline() {
+            const csvData = document.getElementById('pipelineCsv').value;
+            const uploadMode = document.getElementById('uploadMode').value;
+            const resultDiv = document.getElementById('pipelineResult');
+            
+            resultDiv.textContent = '🚀 Running full pipeline...\\nThis may take a few seconds...';
+            resultDiv.className = 'result';
+            
+            try {
+                const response = await fetch(baseUrl + '/smg-pipeline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ csvData, uploadMode })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.textContent = '✅ Pipeline Success:\\n\\n' + JSON.stringify(result, null, 2);
+                    resultDiv.style.background = '#d4edda';
+                } else {
+                    resultDiv.textContent = '❌ Pipeline Error:\\n\\n' + JSON.stringify(result, null, 2);
+                    resultDiv.style.background = '#f8d7da';
+                }
+            } catch (error) {
+                resultDiv.textContent = '❌ Network Error: ' + error.message;
+                resultDiv.style.background = '#f8d7da';
+            }
+        }
+    </script>
+</body>
+</html>
+  `);
+});
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({
@@ -37,6 +171,7 @@ app.get('/', (req, res) => {
       '/smg-pipeline ✅',
       '/smg-status ✅'
     ],
+    test_page: '/test',
     timestamp: new Date().toISOString()
   });
 });
@@ -728,11 +863,11 @@ app.get('/smg-status', async (req, res) => {
     console.log('🗄️ Running database health checks...');
     
     try {
-      // Test basic connectivity
+      // Test basic connectivity with simple queries (no aggregates)
       const connectivityTest = Date.now();
       const { data: healthTest, error: healthError } = await supabase
         .from('stores')
-        .select('count()')
+        .select('store_id')
         .limit(1);
       
       const connectivityTime = Date.now() - connectivityTest;
@@ -754,9 +889,9 @@ app.get('/smg-status', async (req, res) => {
       // Check table accessibility
       const tablesCheck = Date.now();
       const tableResults = await Promise.allSettled([
-        supabase.from('stores').select('count()').limit(1),
-        supabase.from('daily_cx_scores').select('count()').limit(1),
-        supabase.from('calendar').select('count()').limit(1)
+        supabase.from('stores').select('store_id').limit(1),
+        supabase.from('daily_cx_scores').select('store_id').limit(1),
+        supabase.from('calendar').select('date').limit(1)
       ]);
       
       systemStatus.database_health.table_accessibility = {
@@ -777,26 +912,23 @@ app.get('/smg-status', async (req, res) => {
       systemStatus.overall_status = 'degraded';
     }
     
-    // DATA SUMMARY
+    // DATA SUMMARY (using simple queries)
     console.log('📈 Gathering data summary...');
     
     try {
       const summaryQueries = await Promise.allSettled([
-        supabase.from('stores').select('count()'),
-        supabase.from('daily_cx_scores').select('count()'),
+        supabase.from('stores').select('store_id').limit(100),
         supabase.from('daily_cx_scores').select('date').order('date', { ascending: false }).limit(1),
         supabase.from('daily_cx_scores').select('date').order('date', { ascending: true }).limit(1)
       ]);
       
       systemStatus.data_summary = {
         stores_count: summaryQueries[0].status === 'fulfilled' ? 
-          (summaryQueries[0].value.data?.[0]?.count || 0) : 'unknown',
-        daily_scores_count: summaryQueries[1].status === 'fulfilled' ? 
-          (summaryQueries[1].value.data?.[0]?.count || 0) : 'unknown',
-        latest_date: summaryQueries[2].status === 'fulfilled' ? 
-          (summaryQueries[2].value.data?.[0]?.date || 'unknown') : 'unknown',
-        earliest_date: summaryQueries[3].status === 'fulfilled' ? 
-          (summaryQueries[3].value.data?.[0]?.date || 'unknown') : 'unknown'
+          (summaryQueries[0].value.data?.length || 0) : 'unknown',
+        latest_date: summaryQueries[1].status === 'fulfilled' ? 
+          (summaryQueries[1].value.data?.[0]?.date || 'unknown') : 'unknown',
+        earliest_date: summaryQueries[2].status === 'fulfilled' ? 
+          (summaryQueries[2].value.data?.[0]?.date || 'unknown') : 'unknown'
       };
       
       // Calculate data freshness
@@ -820,7 +952,7 @@ app.get('/smg-status', async (req, res) => {
       node_version: process.version,
       platform: process.platform,
       port: PORT,
-      environment: process.env.NODE_ENV || 'development',
+      environment: process.env.NODE_ENV || 'production',
       modules_available: [
         { name: 'smg-daily-dates', method: 'GET', status: 'active' },
         { name: 'smg-transform', method: 'POST', status: 'active' },
