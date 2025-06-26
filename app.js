@@ -34,7 +34,7 @@ app.get('/', (req, res) => {
       '/smg-daily-dates ✅',
       '/smg-transform ✅', 
       '/smg-upload ✅',
-      '/smg-pipeline 🔄',
+      '/smg-pipeline ✅',
       '/smg-status 🔄'
     ],
     timestamp: new Date().toISOString()
@@ -386,6 +386,299 @@ app.post('/smg-upload', async (req, res) => {
     console.error('❌ SMG upload error:', error);
     res.status(500).json({
       error: 'Internal server error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// MODULE 4: SMG Pipeline - Complete integration flow
+app.post('/smg-pipeline', async (req, res) => {
+  try {
+    console.log('🚀 Starting SMG complete pipeline execution...');
+    
+    const { csvData, dates, uploadMode = 'upsert' } = req.body;
+    const pipelineStart = new Date();
+    const pipelineResults = {
+      pipeline_id: `pipeline_${Date.now()}`,
+      status: 'running',
+      started_at: pipelineStart.toISOString(),
+      stages: {
+        date_calculation: { status: 'pending', duration_ms: 0 },
+        transformation: { status: 'pending', duration_ms: 0 },
+        upload: { status: 'pending', duration_ms: 0 }
+      },
+      total_duration_ms: 0,
+      records_processed: 0,
+      errors: []
+    };
+    
+    // STAGE 1: Date calculation (if dates not provided)
+    let processingDates = dates;
+    if (!processingDates || !Array.isArray(processingDates)) {
+      console.log('📅 Stage 1: Calculating processing dates...');
+      const stage1Start = Date.now();
+      
+      try {
+        const today = new Date();
+        processingDates = [];
+        
+        // Calculate the last 3 calendar days
+        for (let i = 0; i < 3; i++) {
+          const date = new Date(today);
+          date.setDate(today.getDate() - i);
+          processingDates.push(date.toISOString().split('T')[0]);
+        }
+        
+        pipelineResults.stages.date_calculation = {
+          status: 'completed',
+          duration_ms: Date.now() - stage1Start,
+          dates_calculated: processingDates
+        };
+        
+        console.log(`✅ Stage 1 complete: ${processingDates.length} dates calculated`);
+        
+      } catch (error) {
+        pipelineResults.stages.date_calculation = {
+          status: 'failed',
+          duration_ms: Date.now() - stage1Start,
+          error: error.message
+        };
+        pipelineResults.errors.push(`Date calculation failed: ${error.message}`);
+        throw error;
+      }
+    } else {
+      pipelineResults.stages.date_calculation = {
+        status: 'skipped',
+        duration_ms: 0,
+        reason: 'dates_provided_by_user'
+      };
+    }
+    
+    // Validate CSV data is provided
+    if (!csvData) {
+      throw new Error('CSV data is required for pipeline execution');
+    }
+    
+    // STAGE 2: Data transformation for each date
+    console.log('🔄 Stage 2: Transforming CSV data...');
+    const stage2Start = Date.now();
+    let allTransformedData = [];
+    
+    try {
+      for (const processDate of processingDates) {
+        console.log(`  Processing date: ${processDate}`);
+        
+        // Parse CSV data - expect comma-separated format
+        const lines = csvData.trim().split('\n');
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        const transformedData = [];
+        
+        // Get store mapping for UUID lookup
+        const { data: stores, error: storeError } = await supabase
+          .from('stores')
+          .select('store_id, store_number, store_name');
+        
+        if (storeError) {
+          throw new Error(`Store lookup failed: ${storeError.message}`);
+        }
+        
+        // Create store lookup maps
+        const storeByNumber = new Map();
+        const storeByName = new Map();
+        stores.forEach(store => {
+          if (store.store_number) storeByNumber.set(store.store_number.toString(), store.store_id);
+          if (store.store_name) storeByName.set(store.store_name.toLowerCase(), store.store_id);
+        });
+        
+        // Process each data row (skip header)
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(',').map(v => v.trim());
+          const rowData = {};
+          
+          // Map values to headers
+          headers.forEach((header, index) => {
+            rowData[header.toLowerCase()] = values[index];
+          });
+          
+          // Find store_id
+          let storeId = null;
+          if (rowData.store_number || rowData['store number'] || rowData.store) {
+            const storeNum = rowData.store_number || rowData['store number'] || rowData.store;
+            storeId = storeByNumber.get(storeNum.toString());
+          }
+          
+          if (!storeId && (rowData.store_name || rowData['store name'])) {
+            const storeName = (rowData.store_name || rowData['store name']).toLowerCase();
+            storeId = storeByName.get(storeName);
+          }
+          
+          if (!storeId) continue;
+          
+          // Transform SMG data to daily_cx_scores format
+          Object.keys(rowData).forEach(key => {
+            if (key.includes('question') || key.includes('q_') || key.includes('score')) {
+              const questionMatch = key.match(/q(?:uestion)?[_\s]*(\d+|overall|satisfaction)/i);
+              if (questionMatch && rowData[key] && rowData[key] !== '') {
+                
+                let questionText = questionMatch[1];
+                if (questionText === 'overall') questionText = 'Overall Satisfaction';
+                else if (questionText === 'satisfaction') questionText = 'Satisfaction Score';
+                else questionText = `Question ${questionText}`;
+                
+                const scoreValue = parseFloat(rowData[key]);
+                if (isNaN(scoreValue) || scoreValue < 1 || scoreValue > 5) return;
+                
+                const transformedRecord = {
+                  store_id: storeId,
+                  date: processDate,
+                  question: questionText,
+                  score: Math.round(scoreValue),
+                  response_count: rowData.response_count ? parseInt(rowData.response_count) : 1,
+                  response_percent: rowData.response_percent ? parseFloat(rowData.response_percent) : null,
+                  total_responses: rowData.total_responses ? parseInt(rowData.total_responses) : null
+                };
+                
+                transformedData.push(transformedRecord);
+              }
+            }
+          });
+        }
+        
+        allTransformedData = allTransformedData.concat(transformedData);
+      }
+      
+      pipelineResults.stages.transformation = {
+        status: 'completed',
+        duration_ms: Date.now() - stage2Start,
+        original_rows: csvData.trim().split('\n').length - 1,
+        transformed_rows: allTransformedData.length,
+        dates_processed: processingDates.length
+      };
+      
+      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records transformed`);
+      
+    } catch (error) {
+      pipelineResults.stages.transformation = {
+        status: 'failed',
+        duration_ms: Date.now() - stage2Start,
+        error: error.message
+      };
+      pipelineResults.errors.push(`Transformation failed: ${error.message}`);
+      throw error;
+    }
+    
+    // STAGE 3: Upload to Supabase
+    console.log('📤 Stage 3: Uploading to Supabase...');
+    const stage3Start = Date.now();
+    
+    try {
+      if (allTransformedData.length === 0) {
+        throw new Error('No data to upload after transformation');
+      }
+      
+      // Validate data structure
+      const requiredFields = ['store_id', 'date', 'question', 'score'];
+      const validationErrors = [];
+      
+      allTransformedData.forEach((record, index) => {
+        requiredFields.forEach(field => {
+          if (!record[field]) {
+            validationErrors.push(`Record ${index}: Missing required field '${field}'`);
+          }
+        });
+      });
+      
+      if (validationErrors.length > 0) {
+        throw new Error(`Data validation failed: ${validationErrors.join(', ')}`);
+      }
+      
+      // Perform upload based on mode
+      let uploadResult;
+      if (uploadMode === 'upsert') {
+        const { data: upsertData, error: upsertError } = await supabase
+          .from('daily_cx_scores')
+          .upsert(allTransformedData, {
+            onConflict: 'store_id,date,question,score',
+            ignoreDuplicates: false
+          });
+        
+        if (upsertError) throw new Error(`Upsert failed: ${upsertError.message}`);
+        uploadResult = upsertData;
+        
+      } else if (uploadMode === 'replace') {
+        const dates = [...new Set(allTransformedData.map(d => d.date))];
+        const storeIds = [...new Set(allTransformedData.map(d => d.store_id))];
+        
+        // Delete existing records
+        const { error: deleteError } = await supabase
+          .from('daily_cx_scores')
+          .delete()
+          .in('date', dates)
+          .in('store_id', storeIds);
+        
+        if (deleteError) throw new Error(`Delete failed: ${deleteError.message}`);
+        
+        // Insert new records
+        const { data: insertData, error: insertError } = await supabase
+          .from('daily_cx_scores')
+          .insert(allTransformedData);
+        
+        if (insertError) throw new Error(`Insert failed: ${insertError.message}`);
+        uploadResult = insertData;
+      }
+      
+      const uniqueDates = [...new Set(allTransformedData.map(d => d.date))];
+      const uniqueStores = [...new Set(allTransformedData.map(d => d.store_id))];
+      
+      pipelineResults.stages.upload = {
+        status: 'completed',
+        duration_ms: Date.now() - stage3Start,
+        records_uploaded: allTransformedData.length,
+        upload_mode: uploadMode,
+        dates_affected: uniqueDates.length,
+        stores_affected: uniqueStores.length
+      };
+      
+      console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded`);
+      
+    } catch (error) {
+      pipelineResults.stages.upload = {
+        status: 'failed',
+        duration_ms: Date.now() - stage3Start,
+        error: error.message
+      };
+      pipelineResults.errors.push(`Upload failed: ${error.message}`);
+      throw error;
+    }
+    
+    // Pipeline completion
+    pipelineResults.status = 'completed';
+    pipelineResults.completed_at = new Date().toISOString();
+    pipelineResults.total_duration_ms = Date.now() - pipelineStart.getTime();
+    pipelineResults.records_processed = allTransformedData.length;
+    
+    console.log(`🎉 SMG Pipeline complete: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
+    
+    res.json({
+      success: true,
+      pipeline_results: pipelineResults,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ SMG pipeline error:', error);
+    
+    pipelineResults.status = 'failed';
+    pipelineResults.completed_at = new Date().toISOString();
+    pipelineResults.total_duration_ms = Date.now() - pipelineStart.getTime();
+    pipelineResults.final_error = error.message;
+    
+    res.status(500).json({
+      success: false,
+      pipeline_results: pipelineResults,
+      error: 'Pipeline execution failed',
       message: error.message,
       timestamp: new Date().toISOString()
     });
