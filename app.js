@@ -33,7 +33,7 @@ app.get('/', (req, res) => {
     modules: [
       '/smg-daily-dates ✅',
       '/smg-transform ✅', 
-      '/smg-upload 🔄',
+      '/smg-upload ✅',
       '/smg-pipeline 🔄',
       '/smg-status 🔄'
     ],
@@ -211,6 +211,179 @@ app.post('/smg-transform', async (req, res) => {
     
   } catch (error) {
     console.error('❌ SMG transformation error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// MODULE 3: SMG Upload - Supabase upload using upload.js patterns
+app.post('/smg-upload', async (req, res) => {
+  try {
+    console.log('📤 Starting SMG data upload to Supabase...');
+    
+    const { data, mode = 'upsert' } = req.body;
+    
+    if (!data || !Array.isArray(data)) {
+      return res.status(400).json({
+        error: 'Missing or invalid parameter: data (must be array)',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    if (data.length === 0) {
+      return res.status(400).json({
+        error: 'Empty data array provided',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    console.log(`📊 Uploading ${data.length} records using ${mode} mode...`);
+    
+    // Validate data structure
+    const requiredFields = ['store_id', 'date', 'question', 'score'];
+    const validationErrors = [];
+    
+    data.forEach((record, index) => {
+      requiredFields.forEach(field => {
+        if (!record[field]) {
+          validationErrors.push(`Record ${index}: Missing required field '${field}'`);
+        }
+      });
+      
+      // Validate score range
+      if (record.score && (record.score < 1 || record.score > 5)) {
+        validationErrors.push(`Record ${index}: Score must be between 1 and 5, got ${record.score}`);
+      }
+    });
+    
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: 'Data validation failed',
+        validation_errors: validationErrors,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    let uploadResult;
+    let uploadStats = {
+      inserted: 0,
+      updated: 0,
+      errors: 0,
+      total: data.length
+    };
+    
+    if (mode === 'upsert') {
+      // Use upsert for handling duplicates (update if exists, insert if new)
+      console.log('🔄 Using UPSERT mode for conflict resolution...');
+      
+      const { data: upsertData, error: upsertError } = await supabase
+        .from('daily_cx_scores')
+        .upsert(data, {
+          onConflict: 'store_id,date,question,score',
+          ignoreDuplicates: false
+        });
+      
+      if (upsertError) {
+        console.error('❌ Upsert error:', upsertError);
+        return res.status(500).json({
+          error: 'Database upsert failed',
+          details: upsertError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      uploadResult = upsertData;
+      uploadStats.inserted = data.length; // Upsert doesn't provide granular stats
+      
+    } else if (mode === 'insert') {
+      // Use insert mode (will fail on duplicates)
+      console.log('📥 Using INSERT mode...');
+      
+      const { data: insertData, error: insertError } = await supabase
+        .from('daily_cx_scores')
+        .insert(data);
+      
+      if (insertError) {
+        console.error('❌ Insert error:', insertError);
+        return res.status(500).json({
+          error: 'Database insert failed',
+          details: insertError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      uploadResult = insertData;
+      uploadStats.inserted = data.length;
+      
+    } else if (mode === 'replace') {
+      // Delete existing records for the same date/stores, then insert new ones
+      console.log('🔄 Using REPLACE mode - deleting existing records...');
+      
+      const dates = [...new Set(data.map(d => d.date))];
+      const storeIds = [...new Set(data.map(d => d.store_id))];
+      
+      // Delete existing records
+      const { error: deleteError } = await supabase
+        .from('daily_cx_scores')
+        .delete()
+        .in('date', dates)
+        .in('store_id', storeIds);
+      
+      if (deleteError) {
+        console.error('❌ Delete error:', deleteError);
+        return res.status(500).json({
+          error: 'Database delete failed during replace mode',
+          details: deleteError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Insert new records
+      const { data: insertData, error: insertError } = await supabase
+        .from('daily_cx_scores')
+        .insert(data);
+      
+      if (insertError) {
+        console.error('❌ Insert error after delete:', insertError);
+        return res.status(500).json({
+          error: 'Database insert failed during replace mode',
+          details: insertError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      uploadResult = insertData;
+      uploadStats.inserted = data.length;
+    }
+    
+    // Get upload summary
+    const uniqueDates = [...new Set(data.map(d => d.date))];
+    const uniqueStores = [...new Set(data.map(d => d.store_id))];
+    const uniqueQuestions = [...new Set(data.map(d => d.question))];
+    
+    const result = {
+      success: true,
+      upload_mode: mode,
+      statistics: uploadStats,
+      summary: {
+        dates_affected: uniqueDates.length,
+        stores_affected: uniqueStores.length,
+        questions_processed: uniqueQuestions.length,
+        date_range: uniqueDates.sort(),
+        records_processed: data.length
+      },
+      upload_method: 'supabase_bulk_insert',
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`✅ SMG data upload complete: ${data.length} records processed`);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('❌ SMG upload error:', error);
     res.status(500).json({
       error: 'Internal server error',
       message: error.message,
