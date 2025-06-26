@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SMG Pipeline Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .module { border: 1px solid #ccc; padding: 20px; margin: 10px 0; }
+        button { background: #007cba; color: white; padding: 10px 20px; border: none; cursor: pointer; }
+        button:hover { background: #005a87; }
+        .result { background: #f5f5f5; padding: 10px; margin: 10px 0; white-space: pre-wrap; font-family: monospace; }
+        textarea { width: 100%; height: 80px; }
+    </style>
+</head>
+<body>
+    <h1>SMG Pipeline Tester</h1>
+    
+    <div class="module">
+        <h3>Module 2: Transform CSV</h3>
+        <textarea id="csvData">store,question_1,question_2
+123,4.5,3.8
+124,4.2,4.1</textarea>
+        <br><br>
+        Date: <input type="date" id="transformDate" value="2025-06-26">
+        <br><br>
+        <button onclick="testTransform()">Test Transform</button>
+        <div id="transformResult" class="result"></div>
+    </div>
+    
+    <div class="module">
+        <h3>Module 4: Complete Pipeline</h3>
+        <textarea id="pipelineCsv">store,question_1
+123,4.5
+124,4.2</textarea>
+        <br><br>
+        Upload Mode: 
+        <select id="uploadMode">
+            <option value="upsert">Upsert</option>
+            <option value="insert">Insert</option>
+            <option value="replace">Replace</option>
+        </select>
+        <br><br>
+        <button onclick="testPipeline()">Test Full Pipeline</button>
+        <div id="pipelineResult" class="result"></div>
+    </div>
+
+    <script>
+        const baseUrl = 'https://smg-pipeline-phase2-production.up.railway.app';
+        
+        async function testTransform() {
+            const csvData = document.getElementById('csvData').value;
+            const date = document.getElementById('transformDate').value;
+            const resultDiv = document.getElementById('transformResult');
+            
+            resultDiv.textContent = 'Testing...';
+            
+            try {
+                const response = await fetch(baseUrl + '/smg-transform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ csvData, date })
+                });
+                
+                const result = await response.json();
+                resultDiv.textContent = JSON.stringify(result, null, 2);
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        async function testPipeline() {
+            const csvData = document.getElementById('pipelineCsv').value;
+            const uploadMode = document.getElementById('uploadMode').value;
+            const resultDiv = document.getElementById('pipelineResult');
+            
+            resultDiv.textContent = 'Testing...';
+            
+            try {
+                const response = await fetch(baseUrl + '/smg-pipeline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ csvData, uploadMode })
+                });
+                
+                const result = await response.json();
+                resultDiv.textContent = JSON.stringify(result, null, 2);
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
