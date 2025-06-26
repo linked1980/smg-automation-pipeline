@@ -35,7 +35,7 @@ app.get('/', (req, res) => {
       '/smg-transform ✅', 
       '/smg-upload ✅',
       '/smg-pipeline ✅',
-      '/smg-status 🔄'
+      '/smg-status ✅'
     ],
     timestamp: new Date().toISOString()
   });
@@ -684,6 +684,194 @@ app.post('/smg-pipeline', async (req, res) => {
     });
   }
 });
+
+// MODULE 5: SMG Status - Monitoring and management
+app.get('/smg-status', async (req, res) => {
+  try {
+    console.log('📊 Checking SMG system status...');
+    const statusStart = Date.now();
+    
+    const systemStatus = {
+      overall_status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime_seconds: process.uptime(),
+      system_checks: {},
+      database_health: {},
+      data_summary: {},
+      configuration: {},
+      performance_metrics: {}
+    };
+    
+    // SYSTEM HEALTH CHECKS
+    console.log('🔍 Running system health checks...');
+    
+    // Check environment variables
+    systemStatus.system_checks.environment_variables = {
+      status: 'healthy',
+      required_vars: requiredEnvVars.map(varName => ({
+        name: varName,
+        configured: !!process.env[varName]
+      })),
+      missing_vars: missingEnvVars
+    };
+    
+    // Check memory usage
+    const memUsage = process.memoryUsage();
+    systemStatus.system_checks.memory = {
+      status: memUsage.heapUsed / memUsage.heapTotal < 0.9 ? 'healthy' : 'warning',
+      heap_used_mb: Math.round(memUsage.heapUsed / 1024 / 1024),
+      heap_total_mb: Math.round(memUsage.heapTotal / 1024 / 1024),
+      heap_usage_percent: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)
+    };
+    
+    // DATABASE HEALTH CHECKS
+    console.log('🗄️ Running database health checks...');
+    
+    try {
+      // Test basic connectivity
+      const connectivityTest = Date.now();
+      const { data: healthTest, error: healthError } = await supabase
+        .from('stores')
+        .select('count()')
+        .limit(1);
+      
+      const connectivityTime = Date.now() - connectivityTest;
+      
+      if (healthError) {
+        systemStatus.database_health.connectivity = {
+          status: 'failed',
+          error: healthError.message,
+          response_time_ms: connectivityTime
+        };
+        systemStatus.overall_status = 'degraded';
+      } else {
+        systemStatus.database_health.connectivity = {
+          status: 'healthy',
+          response_time_ms: connectivityTime
+        };
+      }
+      
+      // Check table accessibility
+      const tablesCheck = Date.now();
+      const tableResults = await Promise.allSettled([
+        supabase.from('stores').select('count()').limit(1),
+        supabase.from('daily_cx_scores').select('count()').limit(1),
+        supabase.from('calendar').select('count()').limit(1)
+      ]);
+      
+      systemStatus.database_health.table_accessibility = {
+        status: tableResults.every(r => r.status === 'fulfilled') ? 'healthy' : 'warning',
+        response_time_ms: Date.now() - tablesCheck,
+        tables: {
+          stores: tableResults[0].status === 'fulfilled' ? 'accessible' : 'error',
+          daily_cx_scores: tableResults[1].status === 'fulfilled' ? 'accessible' : 'error',
+          calendar: tableResults[2].status === 'fulfilled' ? 'accessible' : 'error'
+        }
+      };
+      
+    } catch (dbError) {
+      systemStatus.database_health.connectivity = {
+        status: 'failed',
+        error: dbError.message
+      };
+      systemStatus.overall_status = 'degraded';
+    }
+    
+    // DATA SUMMARY
+    console.log('📈 Gathering data summary...');
+    
+    try {
+      const summaryQueries = await Promise.allSettled([
+        supabase.from('stores').select('count()'),
+        supabase.from('daily_cx_scores').select('count()'),
+        supabase.from('daily_cx_scores').select('date').order('date', { ascending: false }).limit(1),
+        supabase.from('daily_cx_scores').select('date').order('date', { ascending: true }).limit(1)
+      ]);
+      
+      systemStatus.data_summary = {
+        stores_count: summaryQueries[0].status === 'fulfilled' ? 
+          (summaryQueries[0].value.data?.[0]?.count || 0) : 'unknown',
+        daily_scores_count: summaryQueries[1].status === 'fulfilled' ? 
+          (summaryQueries[1].value.data?.[0]?.count || 0) : 'unknown',
+        latest_date: summaryQueries[2].status === 'fulfilled' ? 
+          (summaryQueries[2].value.data?.[0]?.date || 'unknown') : 'unknown',
+        earliest_date: summaryQueries[3].status === 'fulfilled' ? 
+          (summaryQueries[3].value.data?.[0]?.date || 'unknown') : 'unknown'
+      };
+      
+      // Calculate data freshness
+      if (systemStatus.data_summary.latest_date !== 'unknown') {
+        const latestDate = new Date(systemStatus.data_summary.latest_date);
+        const today = new Date();
+        const daysDiff = Math.floor((today - latestDate) / (1000 * 60 * 60 * 24));
+        
+        systemStatus.data_summary.data_freshness = {
+          latest_data_age_days: daysDiff,
+          status: daysDiff <= 7 ? 'fresh' : daysDiff <= 30 ? 'stale' : 'very_stale'
+        };
+      }
+      
+    } catch (summaryError) {
+      systemStatus.data_summary.error = summaryError.message;
+    }
+    
+    // CONFIGURATION STATUS
+    systemStatus.configuration = {
+      node_version: process.version,
+      platform: process.platform,
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      modules_available: [
+        { name: 'smg-daily-dates', method: 'GET', status: 'active' },
+        { name: 'smg-transform', method: 'POST', status: 'active' },
+        { name: 'smg-upload', method: 'POST', status: 'active' },
+        { name: 'smg-pipeline', method: 'POST', status: 'active' },
+        { name: 'smg-status', method: 'GET', status: 'active' }
+      ]
+    };
+    
+    // PERFORMANCE METRICS
+    systemStatus.performance_metrics = {
+      status_check_duration_ms: Date.now() - statusStart,
+      uptime_formatted: formatUptime(process.uptime()),
+      memory_usage: systemStatus.system_checks.memory,
+      database_response_time_ms: systemStatus.database_health.connectivity?.response_time_ms || null
+    };
+    
+    // DETERMINE OVERALL STATUS
+    if (systemStatus.database_health.connectivity?.status === 'failed') {
+      systemStatus.overall_status = 'critical';
+    } else if (systemStatus.database_health.connectivity?.status === 'warning' || 
+               systemStatus.system_checks.memory.status === 'warning') {
+      systemStatus.overall_status = 'warning';
+    }
+    
+    console.log(`✅ SMG status check complete: ${systemStatus.overall_status}`);
+    res.json(systemStatus);
+    
+  } catch (error) {
+    console.error('❌ SMG status check error:', error);
+    res.status(500).json({
+      overall_status: 'critical',
+      error: 'Status check failed',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Helper function to format uptime
+function formatUptime(seconds) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (days > 0) return `${days}d ${hours}h ${minutes}m ${secs}s`;
+  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
 
 // Start server
 app.listen(PORT, () => {
