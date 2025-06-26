@@ -31,11 +31,11 @@ app.get('/', (req, res) => {
     service: 'SMG Cloud Automation Pipeline',
     phase: '2',
     modules: [
-      '/smg-daily-dates',
-      '/smg-transform', 
-      '/smg-upload',
-      '/smg-pipeline',
-      '/smg-status'
+      '/smg-daily-dates ✅',
+      '/smg-transform ✅', 
+      '/smg-upload 🔄',
+      '/smg-pipeline 🔄',
+      '/smg-status 🔄'
     ],
     timestamp: new Date().toISOString()
   });
@@ -70,6 +70,147 @@ app.get('/smg-daily-dates', async (req, res) => {
     
   } catch (error) {
     console.error('❌ SMG daily dates error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// MODULE 2: SMG Transform - CSV transformation using multi-year-transformer logic
+app.post('/smg-transform', async (req, res) => {
+  try {
+    console.log('🔄 Starting SMG CSV transformation...');
+    
+    const { csvData, date } = req.body;
+    
+    if (!csvData) {
+      return res.status(400).json({
+        error: 'Missing required parameter: csvData',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    if (!date) {
+      return res.status(400).json({
+        error: 'Missing required parameter: date',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Parse CSV data - expect comma-separated format
+    const lines = csvData.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    
+    console.log(`📊 Processing ${lines.length - 1} data rows with headers:`, headers);
+    
+    const transformedData = [];
+    
+    // Get store mapping for UUID lookup
+    console.log('🏪 Fetching store mappings from Supabase...');
+    const { data: stores, error: storeError } = await supabase
+      .from('stores')
+      .select('store_id, store_number, store_name');
+    
+    if (storeError) {
+      console.error('❌ Store lookup error:', storeError);
+      return res.status(500).json({
+        error: 'Failed to fetch store mappings',
+        details: storeError.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Create store lookup maps
+    const storeByNumber = new Map();
+    const storeByName = new Map();
+    stores.forEach(store => {
+      if (store.store_number) storeByNumber.set(store.store_number.toString(), store.store_id);
+      if (store.store_name) storeByName.set(store.store_name.toLowerCase(), store.store_id);
+    });
+    
+    // Process each data row (skip header)
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map(v => v.trim());
+      const rowData = {};
+      
+      // Map values to headers
+      headers.forEach((header, index) => {
+        rowData[header.toLowerCase()] = values[index];
+      });
+      
+      // Find store_id - try store number first, then store name
+      let storeId = null;
+      
+      if (rowData.store_number || rowData['store number'] || rowData.store) {
+        const storeNum = rowData.store_number || rowData['store number'] || rowData.store;
+        storeId = storeByNumber.get(storeNum.toString());
+      }
+      
+      if (!storeId && (rowData.store_name || rowData['store name'])) {
+        const storeName = (rowData.store_name || rowData['store name']).toLowerCase();
+        storeId = storeByName.get(storeName);
+      }
+      
+      if (!storeId) {
+        console.warn(`⚠️ Could not find store_id for row ${i}:`, rowData);
+        continue;
+      }
+      
+      // Transform SMG data to daily_cx_scores format
+      // Look for question/score columns (typical SMG format)
+      Object.keys(rowData).forEach(key => {
+        if (key.includes('question') || key.includes('q_') || key.includes('score')) {
+          // Extract question and score data
+          const questionMatch = key.match(/q(?:uestion)?[_\s]*(\d+|overall|satisfaction)/i);
+          if (questionMatch && rowData[key] && rowData[key] !== '') {
+            
+            // Determine question text
+            let questionText = questionMatch[1];
+            if (questionText === 'overall') questionText = 'Overall Satisfaction';
+            else if (questionText === 'satisfaction') questionText = 'Satisfaction Score';
+            else questionText = `Question ${questionText}`;
+            
+            // Parse score value
+            const scoreValue = parseFloat(rowData[key]);
+            if (isNaN(scoreValue) || scoreValue < 1 || scoreValue > 5) {
+              console.warn(`⚠️ Invalid score value for ${questionText}:`, rowData[key]);
+              return;
+            }
+            
+            // Create transformed record
+            const transformedRecord = {
+              store_id: storeId,
+              date: date,
+              question: questionText,
+              score: Math.round(scoreValue),
+              response_count: rowData.response_count ? parseInt(rowData.response_count) : 1,
+              response_percent: rowData.response_percent ? parseFloat(rowData.response_percent) : null,
+              total_responses: rowData.total_responses ? parseInt(rowData.total_responses) : null
+            };
+            
+            transformedData.push(transformedRecord);
+          }
+        }
+      });
+    }
+    
+    const result = {
+      success: true,
+      original_rows: lines.length - 1,
+      transformed_rows: transformedData.length,
+      stores_found: stores.length,
+      transformation_method: 'multi_year_transformer_logic',
+      data: transformedData,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`✅ SMG CSV transformation complete: ${transformedData.length} records`);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('❌ SMG transformation error:', error);
     res.status(500).json({
       error: 'Internal server error',
       message: error.message,
