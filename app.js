@@ -24,6 +24,149 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
+// SOPHISTICATED SMG CSV TRANSFORMATION FUNCTIONS
+// Adapted from working csv-transformer.js desktop version
+
+/**
+ * Parse SMG headers to understand complex category/subcategory structure
+ */
+function parseHeaders(headerLine1, headerLine2) {
+  const categories = headerLine1.split(',').map(h => h.trim());
+  const subHeaders = headerLine2.split(',').map(h => h.trim());
+  
+  const metrics = [];
+  let currentCategory = '';
+  
+  for (let i = 1; i < categories.length; i++) {
+    if (categories[i] && categories[i] !== '') {
+      currentCategory = categories[i];
+    }
+    
+    if (currentCategory && subHeaders[i] === 'n') {
+      metrics.push({
+        name: currentCategory,
+        startIndex: i,
+        responseCountIndex: i,
+        scoreIndices: {
+          '5': i + 1,
+          '4': i + 2,
+          '3': i + 3,
+          '2': i + 4,
+          '1': i + 5
+        }
+      });
+    }
+  }
+  
+  return metrics;
+}
+
+/**
+ * Extract date from SMG "Full Scale Report" title line
+ */
+function extractDate(titleLine) {
+  const match = titleLine.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
+  if (match) {
+    return {
+      startDate: match[1],
+      endDate: match[2],
+      dateRange: `${match[1]} - ${match[2]}`
+    };
+  }
+  return null;
+}
+
+/**
+ * Clean SMG values - handle ** and empty values
+ */
+function cleanValue(value) {
+  if (value === '**' || value === '' || value === undefined || value === null) {
+    return 0;
+  }
+  const num = parseFloat(value);
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Parse CSV line properly
+ */
+function parseCSVLine(line) {
+  return line.split(',').map(v => v.trim());
+}
+
+/**
+ * Transform SMG CSV using sophisticated parsing logic
+ */
+function transformSMGCSV(csvContent, targetDate = null) {
+  const lines = csvContent.split('\n').map(line => line.replace(/\r/g, '').trim()).filter(line => line);
+  
+  if (lines.length < 4) {
+    throw new Error('Invalid SMG CSV format - not enough lines');
+  }
+
+  // Extract date from title line (line 0)
+  let dateInfo = extractDate(lines[0]);
+  if (!dateInfo && targetDate) {
+    // Fallback to provided target date
+    dateInfo = { startDate: targetDate, endDate: targetDate };
+  }
+  if (!dateInfo) {
+    throw new Error('Could not extract date from SMG CSV title line');
+  }
+
+  console.log(`📅 SMG Date extracted: ${dateInfo.startDate}`);
+
+  // Parse headers (lines 1 and 2)
+  const headerLine1 = lines[1];
+  const headerLine2 = lines[2];
+  const metrics = parseHeaders(headerLine1, headerLine2);
+  
+  console.log(`🏷️ SMG Metrics found: ${metrics.map(m => m.name).join(', ')}`);
+  
+  const transformedData = [];
+  
+  // Process data lines (line 3+)
+  for (let i = 3; i < lines.length; i++) {
+    const dataLine = lines[i];
+    if (!dataLine.trim()) continue;
+    
+    const values = parseCSVLine(dataLine);
+    const storeLocation = values[0] || `Unknown_${i}`;
+    
+    // Skip header rows that might appear in data
+    if (storeLocation.toLowerCase().includes('store id') || storeLocation === '') {
+      continue;
+    }
+    
+    console.log(`🏪 Processing store: ${storeLocation}`);
+    
+    // For each metric, create records for each score (1-5)
+    metrics.forEach(metric => {
+      const responseCount = cleanValue(values[metric.responseCountIndex]);
+      
+      for (let score = 1; score <= 5; score++) {
+        const scoreIndex = metric.scoreIndices[score.toString()];
+        const responsePercent = cleanValue(values[scoreIndex]);
+        const actualResponseCount = Math.round(responseCount * responsePercent / 100); // Convert percent to actual count
+        
+        transformedData.push({
+          store_location: storeLocation,
+          date: dateInfo.startDate,
+          metric_name: metric.name,
+          question: metric.name,
+          score: score,
+          response_percent: responsePercent,
+          response_count: actualResponseCount,
+          total_responses: responseCount
+        });
+      }
+    });
+  }
+  
+  console.log(`✅ SMG Transform complete: ${transformedData.length} records created`);
+  return transformedData;
+}
+
 // TEST PAGE ENDPOINT
 app.get('/test', (req, res) => {
   res.send(`
@@ -48,15 +191,16 @@ app.get('/test', (req, res) => {
 <body>
     <h1>🚀 SMG Pipeline Tester</h1>
     <div class="status success">✅ Module 1 working! Test the other modules below:</div>
-    <div class="status warning">📝 Updated with real store numbers from your database!</div>
+    <div class="status warning">📝 Updated with sophisticated SMG CSV parsing!</div>
     
     <div class="module">
         <h3>📊 Module 2: Transform CSV Data</h3>
-        <p>Test CSV transformation logic (using real store numbers):</p>
+        <p>Test SMG CSV transformation logic (using sophisticated parsing):</p>
         <label>CSV Data:</label>
-        <textarea id="csvData">store,question_1,question_2
-1738,4.5,3.8
-1805,4.2,4.1</textarea>
+        <textarea id="csvData">Full Scale Report: 6/26/2024 - 6/26/2024
+,Overall Experience - Weekdays,Overall Experience - Weekends
+,n,5,4,3,2,1,n,5,4,3,2,1
+QDOBA,100,20,30,25,15,10,80,25,35,20,15,5</textarea>
         <br><br>
         <label>Date:</label> <input type="date" id="transformDate" value="2025-06-26">
         <br><br>
@@ -66,11 +210,12 @@ app.get('/test', (req, res) => {
     
     <div class="module">
         <h3>🚀 Module 4: Complete Pipeline</h3>
-        <p>Test end-to-end pipeline (dates → transform → upload):</p>
+        <p>Test end-to-end pipeline (SMG format → transform → upload):</p>
         <label>CSV Data:</label>
-        <textarea id="pipelineCsv">store,question_1
-1738,4.5
-1805,4.2</textarea>
+        <textarea id="pipelineCsv">Full Scale Report: 6/26/2024 - 6/26/2024
+,Overall Experience - Weekdays
+,n,5,4,3,2,1
+QDOBA,100,20,30,25,15,10</textarea>
         <br><br>
         <label>Upload Mode:</label> 
         <select id="uploadMode">
@@ -101,7 +246,7 @@ app.get('/test', (req, res) => {
             const date = document.getElementById('transformDate').value;
             const resultDiv = document.getElementById('transformResult');
             
-            resultDiv.textContent = '🔄 Testing transform...';
+            resultDiv.textContent = '🔄 Testing sophisticated SMG transform...';
             resultDiv.className = 'result';
             
             try {
@@ -131,7 +276,7 @@ app.get('/test', (req, res) => {
             const uploadMode = document.getElementById('uploadMode').value;
             const resultDiv = document.getElementById('pipelineResult');
             
-            resultDiv.textContent = '🚀 Running full pipeline...\\nThis may take a few seconds...';
+            resultDiv.textContent = '🚀 Running full pipeline with sophisticated parsing...\\nThis may take a few seconds...';
             resultDiv.className = 'result';
             
             try {
@@ -169,9 +314,9 @@ app.get('/', (req, res) => {
     phase: '2',
     modules: [
       '/smg-daily-dates ✅',
-      '/smg-transform ✅', 
+      '/smg-transform ✅ (SOPHISTICATED SMG PARSING)', 
       '/smg-upload ✅',
-      '/smg-pipeline ✅',
+      '/smg-pipeline ✅ (SOPHISTICATED SMG PARSING)',
       '/smg-status ✅'
     ],
     test_page: '/test',
@@ -216,10 +361,10 @@ app.get('/smg-daily-dates', async (req, res) => {
   }
 });
 
-// MODULE 2: SMG Transform - CSV transformation using multi-year-transformer logic
+// MODULE 2: SMG Transform - SOPHISTICATED SMG CSV transformation
 app.post('/smg-transform', async (req, res) => {
   try {
-    console.log('🔄 Starting SMG CSV transformation...');
+    console.log('🔄 Starting sophisticated SMG CSV transformation...');
     
     const { csvData, date } = req.body;
     
@@ -237,15 +382,12 @@ app.post('/smg-transform', async (req, res) => {
       });
     }
     
-    // Parse CSV data - expect comma-separated format
-    const lines = csvData.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim());
+    console.log('📊 Using sophisticated SMG parsing logic...');
     
-    console.log(`📊 Processing ${lines.length - 1} data rows with headers:`, headers);
+    // Transform using sophisticated SMG logic
+    const transformedData = transformSMGCSV(csvData, date);
     
-    const transformedData = [];
-    
-    // Get store mapping for UUID lookup
+    // Map store locations to store IDs in database
     console.log('🏪 Fetching store mappings from Supabase...');
     const { data: stores, error: storeError } = await supabase
       .from('stores')
@@ -270,88 +412,61 @@ app.post('/smg-transform', async (req, res) => {
       if (store.store_name) storeByName.set(store.store_name.toLowerCase(), store.store_id);
     });
     
-    // Process each data row (skip header)
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim());
-      const rowData = {};
-      
-      // Map values to headers
-      headers.forEach((header, index) => {
-        rowData[header.toLowerCase()] = values[index];
-      });
-      
-      console.log(`🔍 Processing row ${i}:`, rowData);
-      
-      // Find store_id - try store number first, then store name
+    // Map store locations to store IDs and format for database
+    const finalData = [];
+    let mappedCount = 0;
+    
+    transformedData.forEach(record => {
       let storeId = null;
+      const storeLocation = record.store_location;
       
-      if (rowData.store_number || rowData['store number'] || rowData.store) {
-        const storeNum = rowData.store_number || rowData['store number'] || rowData.store;
-        storeId = storeByNumber.get(storeNum.toString());
-        console.log(`🔍 Lookup store number ${storeNum} → ${storeId ? 'Found' : 'Not found'}`);
+      // Try to extract store number from location string (e.g., "QDOBA,1822,0.799" -> "1822")
+      const storeNumberMatch = storeLocation.match(/(\d{4})/);
+      if (storeNumberMatch) {
+        storeId = storeByNumber.get(storeNumberMatch[1]);
       }
       
-      if (!storeId && (rowData.store_name || rowData['store name'])) {
-        const storeName = (rowData.store_name || rowData['store name']).toLowerCase();
-        storeId = storeByName.get(storeName);
-        console.log(`🔍 Lookup store name ${storeName} → ${storeId ? 'Found' : 'Not found'}`);
-      }
-      
+      // Try name matching as fallback
       if (!storeId) {
-        console.warn(`⚠️ Could not find store_id for row ${i}:`, rowData);
-        continue;
-      }
-      
-      // Transform SMG data to daily_cx_scores format
-      // Look for question/score columns (typical SMG format)
-      Object.keys(rowData).forEach(key => {
-        if (key.includes('question') || key.includes('q_') || key.includes('score')) {
-          // Extract question and score data
-          const questionMatch = key.match(/q(?:uestion)?[_\s]*(\d+|overall|satisfaction)/i);
-          if (questionMatch && rowData[key] && rowData[key] !== '') {
-            
-            // Determine question text
-            let questionText = questionMatch[1];
-            if (questionText === 'overall') questionText = 'Overall Satisfaction';
-            else if (questionText === 'satisfaction') questionText = 'Satisfaction Score';
-            else questionText = `Question ${questionText}`;
-            
-            // Parse score value
-            const scoreValue = parseFloat(rowData[key]);
-            if (isNaN(scoreValue) || scoreValue < 1 || scoreValue > 5) {
-              console.warn(`⚠️ Invalid score value for ${questionText}:`, rowData[key]);
-              return;
-            }
-            
-            // Create transformed record
-            const transformedRecord = {
-              store_id: storeId,
-              date: date,
-              question: questionText,
-              score: Math.round(scoreValue),
-              response_count: rowData.response_count ? parseInt(rowData.response_count) : 1,
-              response_percent: rowData.response_percent ? parseFloat(rowData.response_percent) : null,
-              total_responses: rowData.total_responses ? parseInt(rowData.total_responses) : null
-            };
-            
-            transformedData.push(transformedRecord);
-            console.log(`✅ Created record: Store ${storeId}, Question ${questionText}, Score ${transformedRecord.score}`);
+        const locationLower = storeLocation.toLowerCase();
+        for (const [storeName, id] of storeByName) {
+          if (locationLower.includes(storeName)) {
+            storeId = id;
+            break;
           }
         }
-      });
-    }
+      }
+      
+      if (storeId) {
+        finalData.push({
+          store_id: storeId,
+          date: record.date,
+          question: record.question,
+          score: record.score,
+          response_count: record.response_count,
+          response_percent: record.response_percent,
+          total_responses: record.total_responses
+        });
+        mappedCount++;
+      } else {
+        console.warn(`⚠️ Could not map store location: ${storeLocation}`);
+      }
+    });
     
     const result = {
       success: true,
-      original_rows: lines.length - 1,
-      transformed_rows: transformedData.length,
+      original_format: 'sophisticated_smg_csv',
+      original_lines: csvData.split('\n').length,
+      smg_records_extracted: transformedData.length,
+      database_records_mapped: finalData.length,
       stores_found: stores.length,
-      transformation_method: 'multi_year_transformer_logic',
-      data: transformedData,
+      mapping_success_rate: Math.round((mappedCount / transformedData.length) * 100),
+      transformation_method: 'sophisticated_smg_parser',
+      data: finalData,
       timestamp: new Date().toISOString()
     };
     
-    console.log(`✅ SMG CSV transformation complete: ${transformedData.length} records`);
+    console.log(`✅ Sophisticated SMG transformation complete: ${transformedData.length} SMG records → ${finalData.length} database records`);
     res.json(result);
     
   } catch (error) {
@@ -537,7 +652,7 @@ app.post('/smg-upload', async (req, res) => {
   }
 });
 
-// MODULE 4: SMG Pipeline - Complete integration flow
+// MODULE 4: SMG Pipeline - Complete integration flow with SOPHISTICATED PARSING
 app.post('/smg-pipeline', async (req, res) => {
   const pipelineStart = new Date();
   let pipelineResults = {
@@ -555,7 +670,7 @@ app.post('/smg-pipeline', async (req, res) => {
   };
 
   try {
-    console.log('🚀 Starting SMG complete pipeline execution...');
+    console.log('🚀 Starting SMG complete pipeline with sophisticated parsing...');
     
     const { csvData, dates, uploadMode = 'upsert' } = req.body;
     
@@ -606,22 +721,21 @@ app.post('/smg-pipeline', async (req, res) => {
       throw new Error('CSV data is required for pipeline execution');
     }
     
-    // STAGE 2: Data transformation for each date
-    console.log('🔄 Stage 2: Transforming CSV data...');
+    // STAGE 2: SOPHISTICATED SMG CSV TRANSFORMATION
+    console.log('🔄 Stage 2: Sophisticated SMG CSV transformation...');
     const stage2Start = Date.now();
     let allTransformedData = [];
     
     try {
       for (const processDate of processingDates) {
-        console.log(`  Processing date: ${processDate}`);
+        console.log(`  Processing date: ${processDate} with sophisticated SMG parsing`);
         
-        // Parse CSV data - expect comma-separated format
-        const lines = csvData.trim().split('\n');
-        const headers = lines[0].split(',').map(h => h.trim());
+        // Use sophisticated SMG parsing
+        const smgTransformedData = transformSMGCSV(csvData, processDate);
         
-        const transformedData = [];
+        console.log(`  📊 SMG Parser extracted ${smgTransformedData.length} records for ${processDate}`);
         
-        // Get store mapping for UUID lookup
+        // Map store locations to store IDs
         const { data: stores, error: storeError } = await supabase
           .from('stores')
           .select('store_id, store_number, store_name');
@@ -640,75 +754,59 @@ app.post('/smg-pipeline', async (req, res) => {
           if (store.store_name) storeByName.set(store.store_name.toLowerCase(), store.store_id);
         });
         
-        // Process each data row (skip header)
-        for (let i = 1; i < lines.length; i++) {
-          const values = lines[i].split(',').map(v => v.trim());
-          const rowData = {};
-          
-          // Map values to headers
-          headers.forEach((header, index) => {
-            rowData[header.toLowerCase()] = values[index];
-          });
-          
-          // Find store_id
+        // Map and format for database
+        const mappedData = [];
+        smgTransformedData.forEach(record => {
           let storeId = null;
-          if (rowData.store_number || rowData['store number'] || rowData.store) {
-            const storeNum = rowData.store_number || rowData['store number'] || rowData.store;
-            storeId = storeByNumber.get(storeNum.toString());
+          const storeLocation = record.store_location;
+          
+          // Try to extract store number from location string
+          const storeNumberMatch = storeLocation.match(/(\d{4})/);
+          if (storeNumberMatch) {
+            storeId = storeByNumber.get(storeNumberMatch[1]);
           }
           
-          if (!storeId && (rowData.store_name || rowData['store name'])) {
-            const storeName = (rowData.store_name || rowData['store name']).toLowerCase();
-            storeId = storeByName.get(storeName);
-          }
-          
+          // Try name matching as fallback
           if (!storeId) {
-            console.warn(`⚠️ Could not find store_id for row ${i} (store: ${rowData.store || rowData.store_number || 'unknown'})`);
-            continue;
-          }
-          
-          // Transform SMG data to daily_cx_scores format
-          Object.keys(rowData).forEach(key => {
-            if (key.includes('question') || key.includes('q_') || key.includes('score')) {
-              const questionMatch = key.match(/q(?:uestion)?[_\s]*(\d+|overall|satisfaction)/i);
-              if (questionMatch && rowData[key] && rowData[key] !== '') {
-                
-                let questionText = questionMatch[1];
-                if (questionText === 'overall') questionText = 'Overall Satisfaction';
-                else if (questionText === 'satisfaction') questionText = 'Satisfaction Score';
-                else questionText = `Question ${questionText}`;
-                
-                const scoreValue = parseFloat(rowData[key]);
-                if (isNaN(scoreValue) || scoreValue < 1 || scoreValue > 5) return;
-                
-                const transformedRecord = {
-                  store_id: storeId,
-                  date: processDate,
-                  question: questionText,
-                  score: Math.round(scoreValue),
-                  response_count: rowData.response_count ? parseInt(rowData.response_count) : 1,
-                  response_percent: rowData.response_percent ? parseFloat(rowData.response_percent) : null,
-                  total_responses: rowData.total_responses ? parseInt(rowData.total_responses) : null
-                };
-                
-                transformedData.push(transformedRecord);
+            const locationLower = storeLocation.toLowerCase();
+            for (const [storeName, id] of storeByName) {
+              if (locationLower.includes(storeName)) {
+                storeId = id;
+                break;
               }
             }
-          });
-        }
+          }
+          
+          if (storeId) {
+            mappedData.push({
+              store_id: storeId,
+              date: processDate,
+              question: record.question,
+              score: record.score,
+              response_count: record.response_count,
+              response_percent: record.response_percent,
+              total_responses: record.total_responses
+            });
+          } else {
+            console.warn(`⚠️ Could not map store location: ${storeLocation}`);
+          }
+        });
         
-        allTransformedData = allTransformedData.concat(transformedData);
+        console.log(`  🗂️ Mapped ${mappedData.length} of ${smgTransformedData.length} SMG records to database format`);
+        allTransformedData = allTransformedData.concat(mappedData);
       }
       
       pipelineResults.stages.transformation = {
         status: 'completed',
         duration_ms: Date.now() - stage2Start,
-        original_rows: csvData.trim().split('\n').length - 1,
-        transformed_rows: allTransformedData.length,
-        dates_processed: processingDates.length
+        method: 'sophisticated_smg_parsing',
+        original_csv_lines: csvData.trim().split('\n').length,
+        smg_records_extracted: allTransformedData.length,
+        dates_processed: processingDates.length,
+        mapping_success: `${allTransformedData.length} records mapped to store IDs`
       };
       
-      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records transformed`);
+      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records with sophisticated SMG parsing`);
       
     } catch (error) {
       pipelineResults.stages.transformation = {
@@ -716,7 +814,7 @@ app.post('/smg-pipeline', async (req, res) => {
         duration_ms: Date.now() - stage2Start,
         error: error.message
       };
-      pipelineResults.errors.push(`Transformation failed: ${error.message}`);
+      pipelineResults.errors.push(`Sophisticated transformation failed: ${error.message}`);
       throw error;
     }
     
@@ -730,10 +828,10 @@ app.post('/smg-pipeline', async (req, res) => {
           status: 'skipped',
           duration_ms: Date.now() - stage3Start,
           reason: 'no_data_to_upload',
-          warning: 'No records were transformed - check store numbers in CSV data'
+          warning: 'No records were mapped - check store locations in SMG CSV data'
         };
         
-        console.log('⚠️ Stage 3 skipped: No data to upload after transformation');
+        console.log('⚠️ Stage 3 skipped: No data to upload after sophisticated transformation');
       } else {
         // Validate data structure
         const requiredFields = ['store_id', 'date', 'question', 'score'];
@@ -798,7 +896,7 @@ app.post('/smg-pipeline', async (req, res) => {
           stores_affected: uniqueStores.length
         };
         
-        console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded`);
+        console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded via sophisticated parsing`);
       }
       
     } catch (error) {
@@ -817,11 +915,12 @@ app.post('/smg-pipeline', async (req, res) => {
     pipelineResults.total_duration_ms = Date.now() - pipelineStart.getTime();
     pipelineResults.records_processed = allTransformedData.length;
     
-    console.log(`🎉 SMG Pipeline complete: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
+    console.log(`🎉 SMG Pipeline complete with sophisticated parsing: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
     
     res.json({
       success: true,
       pipeline_results: pipelineResults,
+      transformation_method: 'sophisticated_smg_parsing',
       timestamp: new Date().toISOString()
     });
     
@@ -978,9 +1077,9 @@ app.get('/smg-status', async (req, res) => {
       environment: process.env.NODE_ENV || 'production',
       modules_available: [
         { name: 'smg-daily-dates', method: 'GET', status: 'active' },
-        { name: 'smg-transform', method: 'POST', status: 'active' },
+        { name: 'smg-transform', method: 'POST', status: 'active', enhancement: 'SOPHISTICATED_SMG_PARSING' },
         { name: 'smg-upload', method: 'POST', status: 'active' },
-        { name: 'smg-pipeline', method: 'POST', status: 'active' },
+        { name: 'smg-pipeline', method: 'POST', status: 'active', enhancement: 'SOPHISTICATED_SMG_PARSING' },
         { name: 'smg-status', method: 'GET', status: 'active' }
       ]
     };
@@ -1031,6 +1130,7 @@ function formatUptime(seconds) {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SMG Cloud Automation Pipeline running on port ${PORT}`);
+  console.log('🔧 SOPHISTICATED SMG CSV PARSING ENABLED');
   console.log('Environment variables loaded:');
   console.log('- SUPABASE_URL:', process.env.SUPABASE_URL ? 'Set' : 'Missing');
   console.log('- SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? 'Set' : 'Missing');
