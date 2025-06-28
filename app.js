@@ -29,10 +29,27 @@ if (missingEnvVars.length > 0) {
 
 /**
  * Parse SMG headers to understand complex category/subcategory structure
+ * NOW WITH EXTENSIVE DEBUG LOGGING TO IDENTIFY FORMAT MISMATCH
  */
 function parseHeaders(headerLine1, headerLine2) {
+  console.log('🔍 DEBUG parseHeaders() - START');
+  console.log('📊 Raw headerLine1 length:', headerLine1 ? headerLine1.length : 'NULL');
+  console.log('📊 Raw headerLine2 length:', headerLine2 ? headerLine2.length : 'NULL');
+  console.log('📊 Raw headerLine1:', JSON.stringify(headerLine1));
+  console.log('📊 Raw headerLine2:', JSON.stringify(headerLine2));
+  
+  if (!headerLine1 || !headerLine2) {
+    console.log('❌ DEBUG: Missing header lines!');
+    return [];
+  }
+  
   const categories = headerLine1.split(',').map(h => h.trim());
   const subHeaders = headerLine2.split(',').map(h => h.trim());
+  
+  console.log('📊 Categories count:', categories.length);
+  console.log('📊 SubHeaders count:', subHeaders.length);
+  console.log('📊 First 10 categories:', categories.slice(0, 10));
+  console.log('📊 First 10 subHeaders:', subHeaders.slice(0, 10));
   
   const metrics = [];
   let currentCategory = '';
@@ -42,7 +59,13 @@ function parseHeaders(headerLine1, headerLine2) {
       currentCategory = categories[i];
     }
     
+    // Debug each iteration for first 15 indices
+    if (i <= 15) {
+      console.log(`📊 Index ${i}: category='${currentCategory}', subHeader='${subHeaders[i]}'`);
+    }
+    
     if (currentCategory && subHeaders[i] === 'n') {
+      console.log(`✅ DEBUG: MATCH FOUND at index ${i} for category '${currentCategory}'`);
       metrics.push({
         name: currentCategory,
         startIndex: i,
@@ -58,6 +81,10 @@ function parseHeaders(headerLine1, headerLine2) {
     }
   }
   
+  console.log('🔍 DEBUG parseHeaders() - END');
+  console.log('📊 Total metrics found:', metrics.length);
+  console.log('📊 Metric names:', metrics.map(m => m.name));
+  
   return metrics;
 }
 
@@ -65,14 +92,17 @@ function parseHeaders(headerLine1, headerLine2) {
  * Extract date from SMG "Full Scale Report" title line
  */
 function extractDate(titleLine) {
+  console.log('📅 DEBUG extractDate() - titleLine:', JSON.stringify(titleLine));
   const match = titleLine.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
   if (match) {
+    console.log('📅 DEBUG extractDate() - SUCCESS:', match[1], 'to', match[2]);
     return {
       startDate: match[1],
       endDate: match[2],
       dateRange: `${match[1]} - ${match[2]}`
     };
   }
+  console.log('📅 DEBUG extractDate() - FAILED');
   return null;
 }
 
@@ -98,7 +128,17 @@ function parseCSVLine(line) {
  * Transform SMG CSV using sophisticated parsing logic
  */
 function transformSMGCSV(csvContent, targetDate = null) {
+  console.log('🔄 DEBUG transformSMGCSV() - START');
+  console.log('📊 CSV content length:', csvContent ? csvContent.length : 'NULL');
+  console.log('📊 Target date:', targetDate);
+  
   const lines = csvContent.split('\n').map(line => line.replace(/\r/g, '').trim()).filter(line => line);
+  
+  console.log('📊 Total lines after processing:', lines.length);
+  console.log('📊 First 3 lines:');
+  for (let i = 0; i < Math.min(3, lines.length); i++) {
+    console.log(`   Line ${i}: ${JSON.stringify(lines[i].substring(0, 100))}...`);
+  }
   
   if (lines.length < 4) {
     throw new Error('Invalid SMG CSV format - not enough lines');
@@ -116,7 +156,11 @@ function transformSMGCSV(csvContent, targetDate = null) {
 
   console.log(`📅 SMG Date extracted: ${dateInfo.startDate}`);
 
-  // Parse headers (lines 1 and 2)
+  // Parse headers (lines 1 and 2) - THIS IS WHERE THE ISSUE LIKELY IS
+  console.log('🏷️ DEBUG: About to parse headers...');
+  console.log('🏷️ Header line 1 (index 1):', JSON.stringify(lines[1]));
+  console.log('🏷️ Header line 2 (index 2):', JSON.stringify(lines[2]));
+  
   const headerLine1 = lines[1];
   const headerLine2 = lines[2];
   const metrics = parseHeaders(headerLine1, headerLine2);
@@ -191,11 +235,11 @@ app.get('/test', (req, res) => {
 <body>
     <h1>🚀 SMG Pipeline Tester</h1>
     <div class="status success">✅ Module 1 working! Test the other modules below:</div>
-    <div class="status warning">📝 Updated with sophisticated SMG CSV parsing!</div>
+    <div class="status warning">🔍 DEBUG VERSION: Added extensive logging to identify CSV format mismatch!</div>
     
     <div class="module">
         <h3>📊 Module 2: Transform CSV Data</h3>
-        <p>Test SMG CSV transformation logic (using sophisticated parsing):</p>
+        <p>Test SMG CSV transformation logic (with debug logging):</p>
         <label>CSV Data:</label>
         <textarea id="csvData">Full Scale Report: 6/26/2024 - 6/26/2024
 ,Overall Experience - Weekdays,Overall Experience - Weekends
@@ -210,7 +254,7 @@ QDOBA,100,20,30,25,15,10,80,25,35,20,15,5</textarea>
     
     <div class="module">
         <h3>🚀 Module 4: Complete Pipeline</h3>
-        <p>Test end-to-end pipeline (SMG format → transform → upload):</p>
+        <p>Test end-to-end pipeline (with extensive debug logging):</p>
         <label>CSV Data:</label>
         <textarea id="pipelineCsv">Full Scale Report: 6/26/2024 - 6/26/2024
 ,Overall Experience - Weekdays
@@ -246,7 +290,7 @@ QDOBA,100,20,30,25,15,10</textarea>
             const date = document.getElementById('transformDate').value;
             const resultDiv = document.getElementById('transformResult');
             
-            resultDiv.textContent = '🔄 Testing sophisticated SMG transform...';
+            resultDiv.textContent = '🔄 Testing sophisticated SMG transform with debug logging...';
             resultDiv.className = 'result';
             
             try {
@@ -276,7 +320,7 @@ QDOBA,100,20,30,25,15,10</textarea>
             const uploadMode = document.getElementById('uploadMode').value;
             const resultDiv = document.getElementById('pipelineResult');
             
-            resultDiv.textContent = '🚀 Running full pipeline with sophisticated parsing...\\nThis may take a few seconds...';
+            resultDiv.textContent = '🚀 Running full pipeline with debug logging...\\nThis may take a few seconds...';
             resultDiv.className = 'result';
             
             try {
@@ -314,9 +358,9 @@ app.get('/', (req, res) => {
     phase: '2',
     modules: [
       '/smg-daily-dates ✅',
-      '/smg-transform ✅ (SOPHISTICATED SMG PARSING)', 
+      '/smg-transform ✅ (DEBUG VERSION - EXTENSIVE LOGGING)', 
       '/smg-upload ✅',
-      '/smg-pipeline ✅ (SOPHISTICATED SMG PARSING)',
+      '/smg-pipeline ✅ (DEBUG VERSION - EXTENSIVE LOGGING)',
       '/smg-status ✅'
     ],
     test_page: '/test',
@@ -361,10 +405,10 @@ app.get('/smg-daily-dates', async (req, res) => {
   }
 });
 
-// MODULE 2: SMG Transform - SOPHISTICATED SMG CSV transformation
+// MODULE 2: SMG Transform - SOPHISTICATED SMG CSV transformation with DEBUG LOGGING
 app.post('/smg-transform', async (req, res) => {
   try {
-    console.log('🔄 Starting sophisticated SMG CSV transformation...');
+    console.log('🔄 Starting sophisticated SMG CSV transformation with debug logging...');
     
     const { csvData, date } = req.body;
     
@@ -382,7 +426,7 @@ app.post('/smg-transform', async (req, res) => {
       });
     }
     
-    console.log('📊 Using sophisticated SMG parsing logic...');
+    console.log('📊 Using sophisticated SMG parsing logic with debug logging...');
     
     // Transform using sophisticated SMG logic
     const transformedData = transformSMGCSV(csvData, date);
@@ -461,7 +505,7 @@ app.post('/smg-transform', async (req, res) => {
       database_records_mapped: finalData.length,
       stores_found: stores.length,
       mapping_success_rate: Math.round((mappedCount / transformedData.length) * 100),
-      transformation_method: 'sophisticated_smg_parser',
+      transformation_method: 'sophisticated_smg_parser_with_debug',
       data: finalData,
       timestamp: new Date().toISOString()
     };
@@ -652,7 +696,7 @@ app.post('/smg-upload', async (req, res) => {
   }
 });
 
-// MODULE 4: SMG Pipeline - Complete integration flow with SOPHISTICATED PARSING
+// MODULE 4: SMG Pipeline - Complete integration flow with SOPHISTICATED PARSING and DEBUG LOGGING
 app.post('/smg-pipeline', async (req, res) => {
   const pipelineStart = new Date();
   let pipelineResults = {
@@ -670,7 +714,7 @@ app.post('/smg-pipeline', async (req, res) => {
   };
 
   try {
-    console.log('🚀 Starting SMG complete pipeline with sophisticated parsing...');
+    console.log('🚀 Starting SMG complete pipeline with sophisticated parsing and debug logging...');
     
     const { csvData, dates, uploadMode = 'upsert' } = req.body;
     
@@ -721,14 +765,14 @@ app.post('/smg-pipeline', async (req, res) => {
       throw new Error('CSV data is required for pipeline execution');
     }
     
-    // STAGE 2: SOPHISTICATED SMG CSV TRANSFORMATION
-    console.log('🔄 Stage 2: Sophisticated SMG CSV transformation...');
+    // STAGE 2: SOPHISTICATED SMG CSV TRANSFORMATION WITH DEBUG LOGGING
+    console.log('🔄 Stage 2: Sophisticated SMG CSV transformation with debug logging...');
     const stage2Start = Date.now();
     let allTransformedData = [];
     
     try {
       for (const processDate of processingDates) {
-        console.log(`  Processing date: ${processDate} with sophisticated SMG parsing`);
+        console.log(`  Processing date: ${processDate} with sophisticated SMG parsing and debug logging`);
         
         // Use sophisticated SMG parsing
         const smgTransformedData = transformSMGCSV(csvData, processDate);
@@ -799,14 +843,14 @@ app.post('/smg-pipeline', async (req, res) => {
       pipelineResults.stages.transformation = {
         status: 'completed',
         duration_ms: Date.now() - stage2Start,
-        method: 'sophisticated_smg_parsing',
+        method: 'sophisticated_smg_parsing_with_debug',
         original_csv_lines: csvData.trim().split('\n').length,
         smg_records_extracted: allTransformedData.length,
         dates_processed: processingDates.length,
         mapping_success: `${allTransformedData.length} records mapped to store IDs`
       };
       
-      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records with sophisticated SMG parsing`);
+      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records with sophisticated SMG parsing and debug logging`);
       
     } catch (error) {
       pipelineResults.stages.transformation = {
@@ -915,12 +959,12 @@ app.post('/smg-pipeline', async (req, res) => {
     pipelineResults.total_duration_ms = Date.now() - pipelineStart.getTime();
     pipelineResults.records_processed = allTransformedData.length;
     
-    console.log(`🎉 SMG Pipeline complete with sophisticated parsing: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
+    console.log(`🎉 SMG Pipeline complete with sophisticated parsing and debug logging: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
     
     res.json({
       success: true,
       pipeline_results: pipelineResults,
-      transformation_method: 'sophisticated_smg_parsing',
+      transformation_method: 'sophisticated_smg_parsing_with_debug',
       timestamp: new Date().toISOString()
     });
     
@@ -1077,9 +1121,9 @@ app.get('/smg-status', async (req, res) => {
       environment: process.env.NODE_ENV || 'production',
       modules_available: [
         { name: 'smg-daily-dates', method: 'GET', status: 'active' },
-        { name: 'smg-transform', method: 'POST', status: 'active', enhancement: 'SOPHISTICATED_SMG_PARSING' },
+        { name: 'smg-transform', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_EXTENSIVE_LOGGING' },
         { name: 'smg-upload', method: 'POST', status: 'active' },
-        { name: 'smg-pipeline', method: 'POST', status: 'active', enhancement: 'SOPHISTICATED_SMG_PARSING' },
+        { name: 'smg-pipeline', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_EXTENSIVE_LOGGING' },
         { name: 'smg-status', method: 'GET', status: 'active' }
       ]
     };
@@ -1130,7 +1174,7 @@ function formatUptime(seconds) {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SMG Cloud Automation Pipeline running on port ${PORT}`);
-  console.log('🔧 SOPHISTICATED SMG CSV PARSING ENABLED');
+  console.log('🔍 DEBUG VERSION WITH EXTENSIVE LOGGING ENABLED');
   console.log('Environment variables loaded:');
   console.log('- SUPABASE_URL:', process.env.SUPABASE_URL ? 'Set' : 'Missing');
   console.log('- SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? 'Set' : 'Missing');
