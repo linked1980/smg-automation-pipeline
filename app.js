@@ -27,6 +27,21 @@ if (missingEnvVars.length > 0) {
 // SOPHISTICATED SMG CSV TRANSFORMATION FUNCTIONS
 // Adapted from working csv-transformer.js desktop version
 
+/**
+ * Filter out non-store entries before attempting store mapping
+ * Real stores follow pattern: "002448 - Nathan Lane" 
+ * Non-stores are just names: "Chad Reynolds", "QDOBA", "Combined", "Daniel Wsenberg"
+ */
+function isValidStoreLocation(location) {
+  // Real stores have format: "digits - store name" or contain comma with digits
+  // Examples: "002448 - Nathan Lane", "001738 - Woodbury", "QDOBA,1822,0.799"
+  // Non-stores: "Chad Reynolds", "QDOBA", "Combined", "Daniel Wsenberg"
+  
+  const storePatternWithDash = /^\d+\s*-\s*.+/;  // "002448 - Store Name"
+  const storePatternWithComma = /^[^,]*,\d+,/;   // "QDOBA,1822,0.799"
+  
+  return storePatternWithDash.test(location.trim()) || storePatternWithComma.test(location.trim());
+}
 
 /**
  * Normalize date strings to consistent YYYY-MM-DD format for database storage
@@ -485,10 +500,18 @@ app.post('/smg-transform', async (req, res) => {
     // Map store locations to store IDs and format for database
     const finalData = [];
     let mappedCount = 0;
+    let skippedCount = 0;
     
     transformedData.forEach(record => {
       let storeId = null;
       const storeLocation = record.store_location;
+      
+      // Skip non-store entries (Combined, Chad Reynolds, QDOBA, etc.)
+      if (!isValidStoreLocation(storeLocation)) {
+        console.log(`⏭️ Skipping non-store entry: ${storeLocation}`);
+        skippedCount++;
+        return;
+      }
       
       // Try to extract store number from location string (e.g., "QDOBA,1822,0.799" -> "1822")
       const storeNumberMatch = storeLocation.match(/(\d+)/);
@@ -536,15 +559,16 @@ app.post('/smg-transform', async (req, res) => {
       original_format: 'sophisticated_smg_csv',
       original_lines: csvData.split('\n').length,
       smg_records_extracted: transformedData.length,
+      non_store_entries_skipped: skippedCount,
       database_records_mapped: finalData.length,
       stores_found: stores.length,
-      mapping_success_rate: Math.round((mappedCount / transformedData.length) * 100),
-      transformation_method: 'sophisticated_smg_parser_with_debug',
+      mapping_success_rate: Math.round((mappedCount / (transformedData.length - skippedCount)) * 100),
+      transformation_method: 'sophisticated_smg_parser_with_filtering',
       data: finalData,
       timestamp: new Date().toISOString()
     };
     
-    console.log(`✅ Sophisticated SMG transformation complete: ${transformedData.length} SMG records → ${finalData.length} database records`);
+    console.log(`✅ Sophisticated SMG transformation complete: ${transformedData.length} SMG records → ${skippedCount} skipped → ${finalData.length} database records`);
     res.json(result);
     
   } catch (error) {
@@ -803,6 +827,7 @@ app.post('/smg-pipeline', async (req, res) => {
     console.log('🔄 Stage 2: Sophisticated SMG CSV transformation with debug logging...');
     const stage2Start = Date.now();
     let allTransformedData = [];
+    let totalSkippedEntries = 0;
     
     try {
       for (const processDate of processingDates) {
@@ -834,9 +859,17 @@ app.post('/smg-pipeline', async (req, res) => {
         
         // Map and format for database
         const mappedData = [];
+        let dateSkippedCount = 0;
         smgTransformedData.forEach(record => {
           let storeId = null;
           const storeLocation = record.store_location;
+          
+          // Skip non-store entries (Combined, Chad Reynolds, QDOBA, etc.)
+          if (!isValidStoreLocation(storeLocation)) {
+            console.log(`⏭️ Skipping non-store entry: ${storeLocation}`);
+            dateSkippedCount++;
+            return;
+          }
           
           // Try to extract store number from location string
           const storeNumberMatch = storeLocation.match(/(\d+)/);
@@ -878,21 +911,24 @@ app.post('/smg-pipeline', async (req, res) => {
           }
         });
         
-        console.log(`  🗂️ Mapped ${mappedData.length} of ${smgTransformedData.length} SMG records to database format`);
+        totalSkippedEntries += dateSkippedCount;
+        console.log(`  🗂️ Mapped ${mappedData.length} of ${smgTransformedData.length} SMG records to database format (${dateSkippedCount} non-store entries skipped)`);
         allTransformedData = allTransformedData.concat(mappedData);
       }
       
       pipelineResults.stages.transformation = {
         status: 'completed',
         duration_ms: Date.now() - stage2Start,
-        method: 'sophisticated_smg_parsing_with_debug',
+        method: 'sophisticated_smg_parsing_with_filtering',
         original_csv_lines: csvData.trim().split('\n').length,
-        smg_records_extracted: allTransformedData.length,
+        smg_records_extracted: allTransformedData.length + totalSkippedEntries,
+        non_store_entries_skipped: totalSkippedEntries,
+        database_records_mapped: allTransformedData.length,
         dates_processed: processingDates.length,
         mapping_success: `${allTransformedData.length} records mapped to store IDs`
       };
       
-      console.log(`✅ Stage 2 complete: ${allTransformedData.length} records with sophisticated SMG parsing and debug logging`);
+      console.log(`✅ Stage 2 complete: ${allTransformedData.length + totalSkippedEntries} records processed → ${totalSkippedEntries} skipped → ${allTransformedData.length} mapped with sophisticated SMG parsing and filtering`);
       
     } catch (error) {
       pipelineResults.stages.transformation = {
@@ -914,10 +950,11 @@ app.post('/smg-pipeline', async (req, res) => {
           status: 'skipped',
           duration_ms: Date.now() - stage3Start,
           reason: 'no_data_to_upload',
-          warning: 'No records were mapped - check store locations in SMG CSV data'
+          warning: 'No records were mapped - check store locations in SMG CSV data',
+          non_store_entries_skipped: totalSkippedEntries
         };
         
-        console.log('⚠️ Stage 3 skipped: No data to upload after sophisticated transformation');
+        console.log('⚠️ Stage 3 skipped: No data to upload after sophisticated transformation and filtering');
       } else {
         // Validate data structure
         const requiredFields = ['store_id', 'date', 'question', 'score'];
@@ -979,10 +1016,11 @@ app.post('/smg-pipeline', async (req, res) => {
           records_uploaded: allTransformedData.length,
           upload_mode: uploadMode,
           dates_affected: uniqueDates.length,
-          stores_affected: uniqueStores.length
+          stores_affected: uniqueStores.length,
+          non_store_entries_skipped: totalSkippedEntries
         };
         
-        console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded via sophisticated parsing`);
+        console.log(`✅ Stage 3 complete: ${allTransformedData.length} records uploaded via sophisticated parsing and filtering`);
       }
       
     } catch (error) {
@@ -1001,12 +1039,12 @@ app.post('/smg-pipeline', async (req, res) => {
     pipelineResults.total_duration_ms = Date.now() - pipelineStart.getTime();
     pipelineResults.records_processed = allTransformedData.length;
     
-    console.log(`🎉 SMG Pipeline complete with sophisticated parsing and debug logging: ${allTransformedData.length} records processed in ${pipelineResults.total_duration_ms}ms`);
+    console.log(`🎉 SMG Pipeline complete with sophisticated parsing and filtering: ${allTransformedData.length} records processed (${totalSkippedEntries} non-store entries filtered) in ${pipelineResults.total_duration_ms}ms`);
     
     res.json({
       success: true,
       pipeline_results: pipelineResults,
-      transformation_method: 'sophisticated_smg_parsing_with_debug',
+      transformation_method: 'sophisticated_smg_parsing_with_filtering',
       timestamp: new Date().toISOString()
     });
     
@@ -1163,9 +1201,9 @@ app.get('/smg-status', async (req, res) => {
       environment: process.env.NODE_ENV || 'production',
       modules_available: [
         { name: 'smg-daily-dates', method: 'GET', status: 'active' },
-        { name: 'smg-transform', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_EXTENSIVE_LOGGING' },
+        { name: 'smg-transform', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_WITH_FILTERING' },
         { name: 'smg-upload', method: 'POST', status: 'active' },
-        { name: 'smg-pipeline', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_EXTENSIVE_LOGGING' },
+        { name: 'smg-pipeline', method: 'POST', status: 'active', enhancement: 'DEBUG_VERSION_WITH_FILTERING' },
         { name: 'smg-status', method: 'GET', status: 'active' }
       ]
     };
@@ -1216,7 +1254,7 @@ function formatUptime(seconds) {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SMG Cloud Automation Pipeline running on port ${PORT}`);
-  console.log('🔍 DEBUG VERSION WITH EXTENSIVE LOGGING ENABLED');
+  console.log('🔍 DEBUG VERSION WITH EXTENSIVE LOGGING AND NON-STORE FILTERING ENABLED');
   console.log('Environment variables loaded:');
   console.log('- SUPABASE_URL:', process.env.SUPABASE_URL ? 'Set' : 'Missing');
   console.log('- SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? 'Set' : 'Missing');
