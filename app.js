@@ -27,6 +27,32 @@ if (missingEnvVars.length > 0) {
 // SOPHISTICATED SMG CSV TRANSFORMATION FUNCTIONS
 // Adapted from working csv-transformer.js desktop version
 
+
+/**
+ * Normalize date strings to consistent YYYY-MM-DD format for database storage
+ * Handles both "M/D/YYYY" (from CSV) and "YYYY-MM-DD" (from orchestrator) formats
+ * ADDED TO FIX DATE OFFSET BUG
+ */
+function normalizeDateForStorageUTC(dateStr) {
+  let year, month, day;
+  
+  if (dateStr.includes('/')) {
+    // Handle "M/D/YYYY" format from CSV
+    const parts = dateStr.split('/');
+    month = parts[0].padStart(2, '0');
+    day = parts[1].padStart(2, '0');
+    year = parts[2];
+  } else if (dateStr.includes('-')) {
+    // Handle "YYYY-MM-DD" format from orchestrator
+    const parts = dateStr.split('-');
+    year = parts[0];
+    month = parts[1];
+    day = parts[2];
+  }
+  
+  return `${year}-${month}-${day}`;
+}
+
 /**
  * Parse SMG headers to understand complex category/subcategory structure
  * NOW WITH EXTENSIVE DEBUG LOGGING TO IDENTIFY FORMAT MISMATCH
@@ -191,11 +217,11 @@ function transformSMGCSV(csvContent, targetDate = null) {
       for (let score = 1; score <= 5; score++) {
         const scoreIndex = metric.scoreIndices[score.toString()];
         const responsePercent = cleanValue(values[scoreIndex]);
-        const actualResponseCount = Math.round(responseCount * responsePercent / 100); // Convert percent to actual count
+        const actualResponseCount = Math.round(responseCount * responsePercent); // Convert percent to actual count
         
         transformedData.push({
           store_location: storeLocation,
-          date: dateInfo.startDate,
+          date: normalizeDateForStorageUTC(dateInfo.startDate),
           metric_name: metric.name,
           question: metric.name,
           score: score,
@@ -465,9 +491,17 @@ app.post('/smg-transform', async (req, res) => {
       const storeLocation = record.store_location;
       
       // Try to extract store number from location string (e.g., "QDOBA,1822,0.799" -> "1822")
-      const storeNumberMatch = storeLocation.match(/(\d{4})/);
+      const storeNumberMatch = storeLocation.match(/(\d+)/);
       if (storeNumberMatch) {
-        storeId = storeByNumber.get(storeNumberMatch[1]);
+        const allDigits = storeNumberMatch[1];
+        const storeNumber = allDigits.length >= 4 ? allDigits.slice(-4) : allDigits;
+        storeId = storeByNumber.get(storeNumber);
+        
+        if (!storeId && allDigits.length > 4) {
+          // Also try with leading zeros removed in case database stores as integer
+          const storeNumberInt = parseInt(storeNumber, 10).toString();
+          storeId = storeByNumber.get(storeNumberInt);
+        }
       }
       
       // Try name matching as fallback
@@ -805,9 +839,17 @@ app.post('/smg-pipeline', async (req, res) => {
           const storeLocation = record.store_location;
           
           // Try to extract store number from location string
-          const storeNumberMatch = storeLocation.match(/(\d{4})/);
+          const storeNumberMatch = storeLocation.match(/(\d+)/);
           if (storeNumberMatch) {
-            storeId = storeByNumber.get(storeNumberMatch[1]);
+        const allDigits = storeNumberMatch[1];
+        const storeNumber = allDigits.length >= 4 ? allDigits.slice(-4) : allDigits;
+        storeId = storeByNumber.get(storeNumber);
+        
+        if (!storeId && allDigits.length > 4) {
+          // Also try with leading zeros removed in case database stores as integer
+          const storeNumberInt = parseInt(storeNumber, 10).toString();
+          storeId = storeByNumber.get(storeNumberInt);
+        }
           }
           
           // Try name matching as fallback
@@ -824,7 +866,7 @@ app.post('/smg-pipeline', async (req, res) => {
           if (storeId) {
             mappedData.push({
               store_id: storeId,
-              date: processDate,
+              date: normalizeDateForStorageUTC(processDate),
               question: record.question,
               score: record.score,
               response_count: record.response_count,
